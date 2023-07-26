@@ -44,12 +44,20 @@ from qgis.core import (QgsApplication,
                        QgsVectorLayerUtils,
                        QgsCoordinateTransform,
                        QgsMapLayerType,
+                       QgsMapLayer,
                        QgsGeometry,
                        QgsProperty,
                        )
 from .resources import *
 from .GPS_Layer_dialog import GPSLayersDialog
 import os.path
+
+
+def message(title, text):
+    msgBox = QMessageBox()
+    msgBox.setWindowTitle(title)
+    msgBox.setText(text)
+    msgBox.exec()
 
 
 class GPSLayers:
@@ -145,37 +153,22 @@ class GPSLayers:
                                                                   save_options)
                 if error[0] == QgsVectorFileWriter.NoError:
                     pass
-                else:
-                    print(error)
-            else:
-                pass
 
     def remove(self, catalog, layers):
         for layer in layers:
             if layer.type() == 0:
-                vlayer = QgsVectorLayer(f"{catalog}/WGS84_{layer.name()}.shp", f"WGS84_{layer.name()}",
-                                        "ogr")
-                QgsProject.instance().addMapLayer(vlayer)
+                QgsProject.instance().addMapLayer(
+                    QgsVectorLayer(f"{catalog}/WGS84_{layer.name()}.shp", f"WGS84_{layer.name()}", "ogr"))
                 QgsProject.instance().removeMapLayer(layer)
-            else:
-                pass
 
     def dct(self):
-        catalog = QFileDialog.getExistingDirectory()
-        self.dlg.lineEdit.setText(catalog)
+        self.dlg.lineEdit.setText(QFileDialog.getExistingDirectory())
 
     def polkw(self, catalog, selectedLayerName):
-        layers = QgsProject.instance().layerTreeRoot().children()
-        save_options = QgsVectorFileWriter.SaveVectorOptions()
-        save_options.driverName = "ESRI Shapefile"
-        save_options.fileEncoding = "UTF-8"
-        save_options.ct = QgsCoordinateTransform(QgsProject.instance().crs(),
-                                                 QgsCoordinateReferenceSystem("EPSG:4326"), QgsProject.instance())
-        transform_context = QgsProject.instance().transformContext()
         selectedfield = self.dlg.comboBox2.currentText()
-        for layer in layers:
+        for layer in QgsProject.instance().layerTreeRoot().children():
             if layer.name() == f"WGS84_{selectedLayerName}":
-                result = processing.run(
+                processing.run(
                     "native:dissolve",
                     {'INPUT': layer.layer(),
                      'FIELD': selectedfield,
@@ -184,83 +177,51 @@ class GPSLayers:
                                         "ogr")
                 QgsProject.instance().addMapLayer(player)
 
-    def change_field(self, i):
-        self.dlg.comboBox2.clear()
-        layers = QgsProject.instance().layerTreeRoot().children()
-        selectedLayer = layers[i].layer()
-        fieldnames = [field.name() for field in selectedLayer.fields()]
-        self.dlg.comboBox2.addItems(fieldnames)
-
     def set_crs(self, layers):
-        for layer in layers:
-            if layer.type() == 0:
-                layer.setCrs(QgsProject.instance().crs())
-            else:
-                pass
+        [layer.setCrs(QgsProject.instance().crs()) for layer in layers if layer.type() == 0]
 
     def point_centroid(self, catalog, selectedLayerName):
-        layersINPUT = [f'WGS84_{selectedLayerName}', 'WGS84_полигоны-квартала']
-        for lay in layersINPUT:
-            print(f'{catalog}/{lay}№.shp')
-            result = processing.run(
+        for lay in [f'WGS84_{selectedLayerName}', 'WGS84_полигоны-квартала']:
+            processing.run(
                 "native:pointonsurface",
                 {'ALL_PARTS': QgsProperty.fromExpression('centroid($geometry)'),
                  'INPUT': lay,
                  'OUTPUT': f'{catalog}/{lay}№.shp'})
-            player = QgsVectorLayer(f'{catalog}/{lay}№.shp', f'{lay}№',
-                                    "ogr")
-            QgsProject.instance().addMapLayer(player)
+            QgsProject.instance().addMapLayer(QgsVectorLayer(f'{catalog}/{lay}№.shp', f'{lay}№', "ogr"))
+
+    def choice_layer(self):
+        self.dlg.comboBox.clear()
+        [self.dlg.comboBox.addItem(layer.name(), layer) for layer in QgsProject.instance().mapLayers().values() if
+         layer.type() == QgsMapLayer.VectorLayer and layer.wkbType() in [3, 6, 1006]]
+
+    def change_field(self):
+        self.dlg.comboBox2.clear()
+        if self.dlg.comboBox.itemData(self.dlg.comboBox.currentIndex()) is not None:
+            [self.dlg.comboBox2.addItem(field.name()) for field in
+             self.dlg.comboBox.itemData(self.dlg.comboBox.currentIndex()).fields()]
 
     def run(self):
         self.dlg = GPSLayersDialog()
-        self.dlg.toolButton.clicked.connect(self.dct)
-
-        layers = QgsProject.instance().layerTreeRoot().children()
         self.dlg.lineEdit.clear()
-        self.dlg.comboBox.clear()
-        self.dlg.comboBox2.clear()
-        layerlist = []
-        for layer in layers:
-            if layer.layer().type() == 0:
-                layerlist.append(layer)
-            else:
-                pass
-        self.dlg.comboBox.addItems([lay.name() for lay in layerlist])
-        self.dlg.comboBox.setCurrentIndex(1)
+        self.dlg.toolButton.clicked.connect(self.dct)
         self.dlg.comboBox.currentIndexChanged.connect(self.change_field)
-        self.change_field(1)
-
+        self.choice_layer()
+        self.change_field()
         self.dlg.show()
         result = self.dlg.exec_()
         if result:
-            selectedLayerIndex = self.dlg.comboBox.currentIndex()
-            selectedLayer = layers[selectedLayerIndex].layer()
-            selectedLayerName = selectedLayer.name()
+            selectedLayer = self.dlg.comboBox.itemData(self.dlg.comboBox.currentIndex())
+            selectedLayerName = self.dlg.comboBox.itemData(self.dlg.comboBox.currentIndex()).name()
             catalog = self.dlg.lineEdit.text()
             if catalog == '':
-                error_msg = QMessageBox()
-                error_msg.setWindowTitle("Ошибка!")
-                error_msg.setText(
-                    "Папка назначения не задана!")
-                error_msg.exec_()
+                message("Ошибка!", "Папка назначения не задана!")
             elif selectedLayer.wkbType() == 3 or selectedLayer.wkbType() == 6:
-                layers = self.iface.mapCanvas().layers()
-                self.set_crs(layers)
-                self.saveSHP(catalog, layers)
-                self.remove(catalog, layers)
+                self.set_crs(self.iface.mapCanvas().layers())
+                self.saveSHP(catalog, self.iface.mapCanvas().layers())
+                self.remove(catalog, self.iface.mapCanvas().layers())
                 self.polkw(catalog, selectedLayerName)
-                if self.dlg.checkBox.isChecked() == True:
+                if self.dlg.checkBox.isChecked():
                     self.point_centroid(catalog, selectedLayerName)
-                msgBox = QMessageBox()
-                msgBox.setIcon(QMessageBox.Information)
-                msgBox.setText(f"Результирующие слои сохранены: {catalog}")
-                msgBox.setWindowTitle("Готово!")
-                msgBox.exec()
-            else:
-                error_msg_2 = QMessageBox()
-                error_msg_2.setWindowTitle("Ошибка!")
-                error_msg_2.setText(
-                    "Выбраный слой не полигональный!")
-                error_msg_2.exec_()
+                message("Готово!", f"Результирующие слои сохранены: {catalog}")
         else:
             pass
